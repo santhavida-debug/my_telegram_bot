@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 # Telegram
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,  # <-- CORRECCIÓN AQUÍ
+    Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
@@ -15,13 +15,12 @@ from telegram.ext import (
 
 # OpenAI
 import openai
-# Hugging Face lazy (no forzamos descarga hasta que haga falta)
-hf_generator = None
+hf_generator = None  # Hugging Face lazy load
 
-# Carga .env si existe (local). En Render preferible usar env vars en dashboard.
+# Carga .env local (Render usará env vars en dashboard)
 load_dotenv()
 
-# Variables de entorno (configúralas en Render dashboard)
+# Variables de entorno
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -34,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Inicializar OpenAI si hay clave
+# Inicializar OpenAI si está configurado
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 
@@ -53,7 +52,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Envía texto para que te responda.")
         return
 
-    # Intentamos OpenAI primero (si está configurada)
+    # Intentamos OpenAI primero
     if OPENAI_API_KEY:
         try:
             resp = openai.ChatCompletion.create(
@@ -68,12 +67,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error("OpenAI error: %s", e)
 
-    # Si OpenAI falla o no está, fallback a HuggingFace (carga perezosa)
+    # Fallback Hugging Face
     global hf_generator
     try:
         if hf_generator is None:
             from transformers import pipeline
-            # CUIDADO: model gpt2 es pequeño; cambia por otro si lo prefieres.
             hf_generator = pipeline(
                 "text-generation", model="gpt2", use_auth_token=HF_TOKEN
             )
@@ -86,24 +84,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Lo siento, no pude generar una respuesta (OpenAI/HF fallaron)."
         )
 
-def build_and_run():
+def main():
     if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN no encontrado en variables de entorno.")
 
-    # Construimos la app usando la API recomendada
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Si tenemos WEBHOOK_URL preferimos webhook (mejor para Render Web Service).
+    # Webhook
     if WEBHOOK_URL:
         webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
         full_url = WEBHOOK_URL.rstrip("/") + webhook_path
         logger.info("Iniciando webhook en %s:%s -> %s", "0.0.0.0", PORT, full_url)
-        # run_webhook inicia un server aiohttp internamente y Telegram enviará updates
         app.run_webhook(
             listen="0.0.0.0",
             port=PORT,
@@ -111,9 +107,9 @@ def build_and_run():
             path=webhook_path,
         )
     else:
-        # Si no hay webhook URL, usamos polling (útil para testing local o workers)
-        logger.info("WEBHOOK_URL no configurada: iniciando polling (local/test).")
+        logger.info("WEBHOOK_URL no configurada: iniciando polling local.")
         app.run_polling()
 
 if __name__ == "__main__":
-    build_and_run()
+    main()
+
